@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: indicators-engine
+Version: 0.1.0
+Summary: Calculador de indicadores técnicos desde dxFeed via NATS
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: nats-py>=2.6.0
+Requires-Dist: orjson>=3.10.7
+Requires-Dist: pydantic>=2.8.2
+Requires-Dist: pandas>=2.2.2
+Requires-Dist: numpy>=1.26.4
+Requires-Dist: ta>=0.11.0
+
+# indicators-engine
+
+Servicio en Python para calcular indicadores técnicos (RSI, CVD, ADX, MACD, VWAP, etc.)
+a partir de datos de dxFeed que llegan vía NATS.
+
+## Flujo
+1. Suscripción a `market.*` (candles, trades, order book).
+2. Cálculo de indicadores.
+3. Publicación en `indicators.*` para el motor de trading.
+
+## Ejecución local
+```bash
+python -m venv .venv
+. .venv/Scripts/activate  # en Windows
+pip install -e .
+python -m indicators_engine.app

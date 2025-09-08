@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/indicators_engine/__init__.py
+src/indicators_engine/app.py
+src/indicators_engine/config.py
+src/indicators_engine/nats_io.py
+src/indicators_engine/schemas.py
+src/indicators_engine.egg-info/PKG-INFO
+src/indicators_engine.egg-info/SOURCES.txt
+src/indicators_engine.egg-info/dependency_links.txt
+src/indicators_engine.egg-info/requires.txt
+src/indicators_engine.egg-info/top_level.txt
+src/indicators_engine/pipelines/__init__.py
+src/indicators_engine/pipelines/rsi.py
+tests/test_placeholder.py

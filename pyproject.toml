@@ -1,0 +1,17 @@
+[project]
+name = "indicators-engine"
+version = "0.1.0"
+description = "Calculador de indicadores técnicos desde dxFeed via NATS"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "nats-py>=2.6.0",
+    "orjson>=3.10.7",
+    "pydantic>=2.8.2",
+    "pandas>=2.2.2",
+    "numpy>=1.26.4",
+    "ta>=0.11.0"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
