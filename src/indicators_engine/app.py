@@ -9,7 +9,7 @@ from .pipelines.rsi import RsiCalc
 IN_SUBJECT = "market.candles.1m"
 OUT_SUBJECT = "indicators.candles.1m.rsi14"
 STREAM_NAME = "INDICATORS"
-STREAM_SUBJECTS = ["indicators.candles.1m.*"]  # cubre rsi14 y otros futuros
+STREAM_SUBJECTS = ["indicators.candles.1m.*"]
 
 async def main():
     cfg = Config()

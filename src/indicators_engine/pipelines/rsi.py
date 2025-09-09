@@ -1,37 +1,71 @@
-import pandas as pd
-from ta.momentum import RSIIndicator
+# src/indicators_engine/pipelines/rsi.py
+from collections import defaultdict
 
 class RsiCalc:
-    def __init__(self, period: int = 14, max_rows: int = 2000):
+    """
+    RSI incremental de Wilder, sin pandas.
+    Mantiene estado por clave (symbol|tf). Requiere 'period' cierres para emitir el primer valor.
+    """
+    def __init__(self, period: int = 14):
+        if period < 1:
+            raise ValueError("RSI period must be >= 1")
         self.period = period
-        self.max_rows = max_rows
-        # key=(symbol, tf) -> DataFrame[ts, close, rsi]
-        self.buffers = {}
+        self.state = defaultdict(lambda: {
+            "prev_close": None,
+            "count": 0,
+            "sum_gain": 0.0,
+            "sum_loss": 0.0,
+            "avg_gain": None,
+            "avg_loss": None,
+            "last_ts": None,
+        })
 
     def on_bar(self, symbol: str, tf: str, ts: int, close: float):
-        key = (symbol, tf)
-        df = self.buffers.get(key)
+        key = f"{symbol}|{tf}"
+        s = self.state[key]
 
-        if df is None:
-            import pandas as pd
-            df = pd.DataFrame(columns=["ts", "close"])
-
-        # upsert por ts
-        if (df["ts"] == ts).any():
-            df.loc[df["ts"] == ts, "close"] = close
-        else:
-            df.loc[len(df)] = [ts, close]
-
-        # orden temporal y recorte de ventana
-        df = df.sort_values("ts")
-        if len(df) > self.max_rows:
-            df = df.iloc[-(self.max_rows // 2):].copy()
-
-        # calcular RSI
-        df["rsi"] = RSIIndicator(df["close"], window=self.period).rsi()
-        self.buffers[key] = df
-
-        last = df.iloc[-1]
-        if pd.isna(last["rsi"]):
+        # Ignora duplicados o barras fuera de orden
+        if s["last_ts"] is not None and ts <= s["last_ts"]:
             return None
-        return float(last["rsi"])
+        s["last_ts"] = ts
+
+        # Primera barra: solo inicializa
+        if s["prev_close"] is None:
+            s["prev_close"] = close
+            s["count"] = 1
+            return None
+
+        change = close - s["prev_close"]
+        s["prev_close"] = close
+
+        gain = change if change > 0 else 0.0
+        loss = -change if change < 0 else 0.0
+
+        # Construcción de la ventana inicial (media simple)
+        if s["avg_gain"] is None or s["avg_loss"] is None:
+            s["sum_gain"] += gain
+            s["sum_loss"] += loss
+            s["count"] += 1
+
+            # Aún no hay suficientes barras
+            if s["count"] <= self.period:
+                return None
+
+            # Primeras medias (tras acumular 'period' cambios)
+            s["avg_gain"] = s["sum_gain"] / self.period
+            s["avg_loss"] = s["sum_loss"] / self.period
+
+        else:
+            # Suavizado de Wilder
+            s["avg_gain"] = ((s["avg_gain"] * (self.period - 1)) + gain) / self.period
+            s["avg_loss"] = ((s["avg_loss"] * (self.period - 1)) + loss) / self.period
+
+        ag, al = s["avg_gain"], s["avg_loss"]
+
+        if al == 0.0:
+            # Sin pérdidas: RSI 100 si hubo alguna ganancia; si no, 50 neutro
+            return 100.0 if ag > 0.0 else 50.0
+
+        rs = ag / al
+        rsi = 100.0 - (100.0 / (1.0 + rs))
+        return float(rsi)
