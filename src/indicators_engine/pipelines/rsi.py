@@ -6,7 +6,7 @@ class RsiCalc:
     RSI incremental de Wilder, sin pandas.
     Mantiene estado por clave (symbol|tf). Requiere 'period' cierres para emitir el primer valor.
     """
-    def __init__(self, period: int = 14):
+    def __init__(self, period: int = 10):
         if period < 1:
             raise ValueError("RSI period must be >= 1")
         self.period = period

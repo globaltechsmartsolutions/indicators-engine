@@ -10,23 +10,39 @@ async def main():
     await nc.connect(NATS_URL)
     print(f"✅ Dummy conectado a: {nc.connected_url.geturl()}")
 
-    ts = int(time.time() * 1000)
-    msg = {
-        "symbol": "ESZ5",
-        "tf": "1m",
-        "ts": ts,
-        "open": 648.2,
-        "high": 648.5,
-        "low": 647.9,
-        "close": 648.1,
-        "volume": 12345
-    }
+    base_ts = (int(time.time()) // 60) * 60 * 1000  # inicio del minuto (ms)
+    symbol = "ESZ5"
+    tf = "1m"
+    price = 648.0
 
-    await nc.publish("market.candles.1m", orjson.dumps(msg))
+    for i in range(20):
+        ts = base_ts + i * 60_000  # +1 minuto por vela
+        o = price
+        step = (-0.05, 0.0, 0.05)[i % 3]  # variación suave determinista
+        c = round(o + step, 4)
+        h = round(max(o, c) + 0.2, 4)
+        l = round(min(o, c) - 0.2, 4)
+        v = 12345 + i
+
+        msg = {
+            "symbol": symbol,
+            "tf": tf,
+            "ts": ts,
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c,
+            "volume": v
+        }
+
+        await nc.publish("market.candles.1m", orjson.dumps(msg))
+        print(f"✅ Enviada candle {i+1:02d}/20:", msg)
+
+        price = c  # siguiente vela arranca desde el close anterior
+
     await nc.flush()
-    print("✅ Enviada candle dummy:", msg)
-
     await nc.drain()
+    print("🎯 Listo: 20 velas publicadas.")
 
 if __name__ == "__main__":
     asyncio.run(main())
