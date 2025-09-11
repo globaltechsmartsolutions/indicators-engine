@@ -3,11 +3,10 @@ import time, re, random
 import pytest
 import pytest_asyncio
 import orjson
-from nats.aio.client import Client as NATS
+from nats.aio.client import Client as NatsClient
 from indicators_engine.pipelines.rsi import RsiCalc
 
 def pytest_addoption(parser):
-    # INI options
     parser.addini("nats_url", "NATS URL", default="nats://127.0.0.1:4222")
     parser.addini("candles_subject", "Subject IN candles", default="market.candles.1m")
     parser.addini("rsi_subject", "Subject OUT rsi", default="indicators.candles.1m.rsi14")
@@ -47,7 +46,7 @@ def cfg(pytestconfig):
 
 @pytest_asyncio.fixture
 async def nc(cfg):
-    nc = NATS()
+    nc = NatsClient()
     await nc.connect(cfg["nats_url"], name="pytest-indicators")
     try:
         yield nc
@@ -79,12 +78,11 @@ def make_candles(n, tf, price0, amplitude, pattern, seed, symbol):
 def make_candles_fn():
     return make_candles
 
-# “Worker” de RSI que usa TU RsiCalc dentro del test (no dependes de tu app externa)
 @pytest_asyncio.fixture
 async def rsi_worker(nc, cfg):
     rsi = RsiCalc(period=cfg["rsi_period"])
-    IN_SUBJ  = cfg["in_subj"]
-    OUT_SUBJ = cfg["out_subj"]
+    in_subj  = cfg["in_subj"]
+    out_subj = cfg["out_subj"]
 
     async def handler(msg):
         c = orjson.loads(msg.data)
@@ -99,10 +97,10 @@ async def rsi_worker(nc, cfg):
                 "value": float(v),
                 "id": f"{c['symbol']}|{c['tf']}|{c['ts']}|rsi{cfg['rsi_period']}",
             }
-            await nc.publish(OUT_SUBJ, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+            await nc.publish(out_subj, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
 
-    sub = await nc.subscribe(IN_SUBJ, cb=handler)
+    sub = await nc.subscribe(in_subj, cb=handler)
     try:
-        yield OUT_SUBJ
+        yield out_subj
     finally:
         await sub.unsubscribe()
