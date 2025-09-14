@@ -7,7 +7,7 @@ from .nats_io import connect_nats
 from .pipelines.rsi import RsiCalc
 
 IN_SUBJECT = "market.candles.1m"
-OUT_SUBJECT = "indicators.candles.1m.rsi14"
+OUT_SUBJECT = "indicators.candles.1m.rsi10"
 STREAM_NAME = "INDICATORS"
 STREAM_SUBJECTS = ["indicators.candles.1m.*"]
 
@@ -52,9 +52,9 @@ async def main():
                 "symbol": symbol,
                 "tf": tf,
                 "ts": ts,
-                "indicator": "rsi14",
+                "indicator": "rsi10",
                 "value": val,
-                "id": f"{symbol}|{tf}|{ts}|rsi14",
+                "id": f"{symbol}|{tf}|{ts}|rsi10",
             }
 
             # Publica a JetStream con de-dup por Nats-Msg-Id

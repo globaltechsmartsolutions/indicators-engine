@@ -11,6 +11,12 @@ async def test_rsi_pipeline(nc, cfg, make_candles_fn, rsi_worker):
 
     q = asyncio.Queue()
 
+
+    print(f"\n[TEST] nats_url={cfg['nats_url']}")
+    print(f"[TEST] IN_SUBJ={IN_SUBJ}")
+    print(f"[TEST] OUT_SUBJ={OUT_SUBJ}")
+    print(f"[TEST] symbol={symbol} tf={tf} n={n}")
+
     async def out_cb(msg):
         print(f"📥 Callback recibió en {msg.subject}: {msg.data!r}")
         try:
@@ -23,13 +29,10 @@ async def test_rsi_pipeline(nc, cfg, make_candles_fn, rsi_worker):
             await q.put(data)
         else:
             print(f"⚠️ Ignorado mensaje no matching: {data}")
-
-    # Suscripción y flush para asegurar registro
     sub_out = await nc.subscribe(OUT_SUBJ, cb=out_cb)
     await nc.flush()
     print(f"👂 Suscrito a {OUT_SUBJ}")
 
-    # Publica velas dummy
     amplitude = cfg.get("amplitude", cfg.get("ampl"))
     for i, c in enumerate(
             make_candles_fn(

@@ -1,15 +1,15 @@
 # tests/conftest.py
 import time, re, random
-import pytest
-import pytest_asyncio
 import orjson
+import asyncio, pytest, pytest_asyncio
 from nats.aio.client import Client as NatsClient
 from indicators_engine.pipelines.rsi import RsiCalc
+from indicators_engine.pipelines.macd import MacdCalc
 
 def pytest_addoption(parser):
     parser.addini("nats_url", "NATS URL", default="nats://127.0.0.1:4222")
     parser.addini("candles_subject", "Subject IN candles", default="market.candles.1m")
-    parser.addini("rsi_subject", "Subject OUT rsi", default="indicators.candles.1m.rsi14")
+    parser.addini("rsi_subject", "Subject OUT rsi", default="indicators.candles.1m.rsi10")
     parser.addini("candle_symbol", "Symbol", default="ESZ5")
     parser.addini("candle_tf", "TF", default="1m")
     parser.addini("candle_n", "N candles", default="20")
@@ -46,12 +46,34 @@ def cfg(pytestconfig):
 
 @pytest_asyncio.fixture
 async def nc(cfg):
-    nc = NatsClient()
-    await nc.connect(cfg["nats_url"], name="pytest-indicators")
+    url = cfg["nats_url"]
+    print(f"[nc] intentando conectar a {url} ...")
+    client = NatsClient()
+    last_err = None
+    for attempt in range(1, 6):
+        try:
+            print(f"[nc] intento {attempt}/5 ...")
+            await asyncio.wait_for(
+                client.connect(url, name="pytest-indicators", allow_reconnect=False),
+                timeout=5.0,  # un poco más de margen
+            )
+            print("[nc] conectado ✔")
+            break
+        except Exception as e:
+            last_err = e
+            print(f"[nc] fallo intento {attempt}: {repr(e)}")
+            await asyncio.sleep(0.8)
+    else:
+        pytest.skip(f"[nc] no se pudo conectar a {url} tras 5 intentos: {repr(last_err)}")
+
     try:
-        yield nc
+        yield client
     finally:
-        await nc.drain()
+        try:
+            await client.drain()
+            print("[nc] drained ✔")
+        except Exception as e:
+            print(f"[nc] error en drain: {e}")
 
 def make_candles(n, tf, price0, amplitude, pattern, seed, symbol):
     rnd = random.Random(seed)
@@ -96,6 +118,33 @@ async def rsi_worker(nc, cfg):
                 "indicator": f"rsi{cfg['rsi_period']}",
                 "value": float(v),
                 "id": f"{c['symbol']}|{c['tf']}|{c['ts']}|rsi{cfg['rsi_period']}",
+            }
+            await nc.publish(out_subj, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    sub = await nc.subscribe(in_subj, cb=handler)
+    try:
+        yield out_subj
+    finally:
+        await sub.unsubscribe()
+
+@pytest_asyncio.fixture
+async def macd_worker(nc, cfg):
+    macd = MacdCalc()
+    in_subj = cfg["in_subj"]
+    out_subj = f"indicators.candles.{cfg['tf']}.macd12_26_9"
+
+    async def handler(msg):
+        c = orjson.loads(msg.data)
+        if c.get("tf") != cfg["tf"]:
+            return
+        v = macd.on_bar(c["symbol"], c["tf"], int(c["ts"]), float(c["close"]))
+        if v is not None:
+            out = {
+                "v": 1, "source": "pytest-macd-worker",
+                "symbol": c["symbol"], "tf": c["tf"], "ts": c["ts"],
+                "indicator": "macd",
+                "macd": v["macd"], "signal": v["signal"], "hist": v["hist"],
+                "id": f"{c['symbol']}|{c['tf']}|{c['ts']}|macd",
             }
             await nc.publish(out_subj, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
 
