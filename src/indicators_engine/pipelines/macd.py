@@ -49,7 +49,7 @@ class MacdCalc:
         macd_val = ema_fast - ema_slow
 
         if s.signal is None:
-            s.signal = macd_val
+            s.signal = macd_val 
             return None  # emite desde la siguiente barra
 
         signal_val = (macd_val - s.signal) * self.k_signal + s.signal

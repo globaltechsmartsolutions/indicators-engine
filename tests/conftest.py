@@ -3,37 +3,67 @@ import time, re, random
 import orjson
 import asyncio, pytest, pytest_asyncio
 from nats.aio.client import Client as NatsClient
+
 from indicators_engine.pipelines.rsi import RsiCalc
 from indicators_engine.pipelines.macd import MacdCalc
 from indicators_engine.pipelines.adx import AdxCalc
 from indicators_engine.pipelines.cvd import CvdCalc
 from indicators_engine.pipelines.vwap import VwapCalc
 from indicators_engine.pipelines.poc import PocCalc
+from indicators_engine.pipelines.cob_state import BookState
+from indicators_engine.pipelines.orderflow import OrderFlowCalc
+from indicators_engine.pipelines.book_order import normalize_dxfeed_book_order
+from indicators_engine.pipelines.heatmap import HeatmapState
+from indicators_engine.pipelines.volume_profile import VolumeProfileCalc
+from indicators_engine.pipelines.liquidity import LiquidityState
+
+
 # ------------------------- pytest.ini options -------------------------
 def pytest_addoption(parser):
+    # --- Infra ---
     parser.addini("nats_url", "NATS URL", default="nats://127.0.0.1:4222")
-    # IN (velas y trades)
-    parser.addini("candles_subject", "Subject IN candles", default="market.candles.1m")
-    parser.addini("in_trades_subject", "Subject IN trades", default="market.trades")
-    # OUT (indicadores)
-    parser.addini("rsi_subject", "Subject OUT rsi",    default="indicators.candles.1m.rsi10")
-    parser.addini("macd_subject", "Subject OUT macd",  default="indicators.candles.1m.macd")
-    parser.addini("adx_subject", "Subject OUT adx",    default="indicators.candles.1m.adx14")
-    parser.addini("out_cvd_subject",  "Subject OUT cvd",  default="indicators.cvd")
-    parser.addini("out_vwap_subject", "Subject OUT vwap", default="indicators.vwap")
-    # Serie de velas sintéticas
-    parser.addini("candle_symbol", "Symbol", default="ESZ5")
-    parser.addini("candle_tf", "TF", default="1m")
-    parser.addini("candle_n", "N candles", default="20")
-    parser.addini("candle_price", "Start price", default="648.0")
-    parser.addini("candle_amplitude", "Amplitude", default="0.35")
-    parser.addini("candle_pattern", "Pattern", default="zigzag")
-    parser.addini("candle_seed", "Seed", default="1")
-    # Parámetros indicadores
-    parser.addini("rsi_period", "RSI period", default="14")
-    parser.addini("adx_period", "ADX period", default="30")
-    parser.addini("cvd_reset_daily", "CVD reset diario", default="true")
-    parser.addini("vwap_reset_daily", "VWAP reset diario", default="true")
+
+    # --- IN (velas y trades) ---
+    parser.addini("candles_subject",  "Subject IN candles", default="market.candles.1m")
+    parser.addini("in_trades_subject","Subject IN trades",  default="market.trades")
+
+    # --- IN (order book/BBO) ---
+    parser.addini("in_orderbook_subject", "Subject IN orderbook", default="market.orderbook")
+    parser.addini("bbo_subject",          "Subject IN BBO",        default="market.bbo")
+
+    # --- OUT (indicadores) ---
+    parser.addini("rsi_subject",         "Subject OUT rsi",         default="indicators.candles.1m.rsi10")
+    parser.addini("macd_subject",        "Subject OUT macd",        default="indicators.candles.1m.macd")
+    parser.addini("adx_subject",         "Subject OUT adx",         default="indicators.candles.1m.adx14")
+    parser.addini("out_cvd_subject",     "Subject OUT CVD",         default="indicators.cvd")
+    parser.addini("out_vwap_subject",    "Subject OUT VWAP",        default="indicators.vwap")
+    parser.addini("out_poc_subj",        "Subject OUT POC",         default="indicators.poc")
+    parser.addini("out_orderflow_subj",  "Subject OUT OrderFlow",   default="indicators.orderflow")
+    parser.addini("out_cob_subject",     "Subject OUT COB",         default="indicators.cob")
+    parser.addini("out_book_order_subject","Subject OUT BookOrder", default="indicators.book_order")
+    parser.addini("out_heatmap_subject", "Subject OUT Heatmap", default="indicators.heatmap")
+    parser.addini("out_liquidity_subject", "Subject OUT Liquidity", default="indicators.liquidity")
+
+
+    # --- Serie de velas sintéticas ---
+    parser.addini("candle_symbol",    "Symbol",        default="ESZ5")
+    parser.addini("candle_tf",        "TF",            default="1m")
+    parser.addini("candle_n",         "N candles",     default="20")
+    parser.addini("candle_price",     "Start price",   default="648.0")
+    parser.addini("candle_amplitude", "Amplitude",     default="0.35")
+    parser.addini("candle_pattern",   "Pattern",       default="zigzag")
+    parser.addini("candle_seed",      "Seed",          default="1")
+
+    # --- Parámetros indicadores ---
+    parser.addini("rsi_period",          "RSI period",           default="14")
+    parser.addini("adx_period",          "ADX period",           default="30")
+    parser.addini("cvd_reset_daily",     "CVD reset diario",     default="true")
+    parser.addini("vwap_reset_daily",    "VWAP reset diario",    default="true")
+    parser.addini("poc_tick_size",       "POC tick size",        default="0.25")
+    parser.addini("poc_reset_daily",     "POC reset diario",     default="true")
+    parser.addini("orderflow_reset_daily","OrderFlow reset diario", default="true")
+    parser.addini("liquidity_depth_levels","Depth levels for liquidity", default="10")
+
 
 # ------------------------- helpers -------------------------
 def _tf_to_ms(tf: str) -> int:
@@ -50,31 +80,55 @@ def _ini_bool(pytestconfig, key: str, default: bool) -> bool:
         return default
     return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
 
+
 # ------------------------- cfg fixture -------------------------
 @pytest.fixture(scope="session")
 def cfg(pytestconfig):
     get = pytestconfig.getini
     return {
-        "nats_url":        get("nats_url"),
-        "in_subj":         get("candles_subject"),
-        "in_trades_subj":  get("in_trades_subject"),
-        "out_subj_rsi":    get("rsi_subject"),
-        "out_subj_macd":   get("macd_subject"),
-        "out_subj_adx":    get("adx_subject"),
-        "out_cvd_subj":    get("out_cvd_subject"),
-        "out_vwap_subj":   get("out_vwap_subject"),
-        "symbol":          get("candle_symbol"),
-        "tf":              get("candle_tf"),
-        "n":               int(get("candle_n")),
-        "price":           float(get("candle_price")),
-        "amplitude":       float(get("candle_amplitude")),
-        "pattern":         get("candle_pattern"),
-        "seed":            int(get("candle_seed")),
-        "rsi_period":      int(get("rsi_period")),
-        "adx_period":      int(get("adx_period")),
-        "cvd_reset_daily": _ini_bool(pytestconfig, "cvd_reset_daily", True),
-        "vwap_reset_daily":_ini_bool(pytestconfig, "vwap_reset_daily", True),
+        # Infra
+        "nats_url":          get("nats_url"),
+
+        # IN
+        "in_subj":           get("candles_subject"),
+        "in_trades_subj":    get("in_trades_subject"),
+        "in_orderbook_subj": get("in_orderbook_subject"),
+        "bbo_subject":       get("bbo_subject"),
+
+        # OUT
+        "out_subj_rsi":      get("rsi_subject"),
+        "out_subj_macd":     get("macd_subject"),
+        "out_subj_adx":      get("adx_subject"),
+        "out_cvd_subj":      get("out_cvd_subject"),
+        "out_vwap_subj":     get("out_vwap_subject"),
+        "out_poc_subj":      get("out_poc_subj"),
+        "out_orderflow_subj":get("out_orderflow_subj"),
+        "out_cob_subj":      get("out_cob_subject"),
+        "out_book_order_subj": get("out_book_order_subject"),
+        "out_heatmap_subj": get("out_heatmap_subject"),
+        "out_liquidity_subj": get("out_liquidity_subject"),
+
+
+        # Serie de velas
+        "symbol":            get("candle_symbol"),
+        "tf":                get("candle_tf"),
+        "n":                 int(get("candle_n")),
+        "price":             float(get("candle_price")),
+        "amplitude":         float(get("candle_amplitude")),
+        "pattern":           get("candle_pattern"),
+        "seed":              int(get("candle_seed")),
+
+        # Parámetros indicadores
+        "rsi_period":        int(get("rsi_period")),
+        "adx_period":        int(get("adx_period")),
+        "cvd_reset_daily":   _ini_bool(pytestconfig, "cvd_reset_daily", True),
+        "vwap_reset_daily":  _ini_bool(pytestconfig, "vwap_reset_daily", True),
+        "poc_tick_size":     float(get("poc_tick_size")),
+        "poc_reset_daily":   _ini_bool(pytestconfig, "poc_reset_daily", True),
+        "orderflow_reset_daily": _ini_bool(pytestconfig, "orderflow_reset_daily", True),
+        "liquidity_depth_levels": int(get("liquidity_depth_levels")),
     }
+
 
 # ------------------------- NATS client -------------------------
 @pytest_asyncio.fixture
@@ -108,6 +162,7 @@ async def nc(cfg):
         except Exception as e:
             print(f"[nc] error en drain: {e}")
 
+
 # ------------------------- data generators -------------------------
 def make_candles(n, tf, price0, amplitude, pattern, seed, symbol):
     rnd = random.Random(seed)
@@ -133,6 +188,7 @@ def make_candles(n, tf, price0, amplitude, pattern, seed, symbol):
 @pytest.fixture
 def make_candles_fn():
     return make_candles
+
 
 # ------------------------- workers -------------------------
 @pytest_asyncio.fixture
@@ -164,6 +220,7 @@ async def rsi_worker(nc, cfg):
         await sub.unsubscribe()
         await nc.flush()
 
+
 @pytest_asyncio.fixture
 async def macd_worker(nc, cfg):
     macd = MacdCalc()
@@ -192,6 +249,7 @@ async def macd_worker(nc, cfg):
     finally:
         await sub.unsubscribe()
         await nc.flush()
+
 
 @pytest_asyncio.fixture
 async def adx_worker(nc, cfg):
@@ -232,6 +290,7 @@ async def adx_worker(nc, cfg):
     finally:
         await sub.unsubscribe()
         await nc.flush()
+
 
 @pytest_asyncio.fixture
 async def cvd_worker(nc, cfg):
@@ -291,6 +350,7 @@ async def cvd_worker(nc, cfg):
         await sub.unsubscribe()
         await nc.flush()
 
+
 @pytest_asyncio.fixture
 async def vwap_worker(nc, cfg):
     """Worker VWAP: lee trades y publica VWAP."""
@@ -332,6 +392,7 @@ async def vwap_worker(nc, cfg):
     finally:
         await sub.unsubscribe()
         await nc.flush()
+
 
 @pytest_asyncio.fixture
 async def poc_worker(nc, cfg):
@@ -382,6 +443,351 @@ async def poc_worker(nc, cfg):
             "indicator": "poc",
             "value": float(value),  # precio del POC
             "id": f"{symbol}|{tf}|{ts}|poc",
+        }
+        await nc.publish(OUT_SUBJ, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    sub = await nc.subscribe(IN_SUBJ, cb=on_trade_msg)
+    await nc.flush()
+    try:
+        yield OUT_SUBJ
+    finally:
+        await sub.unsubscribe()
+        await nc.flush()
+
+
+@pytest_asyncio.fixture
+async def cob_incremental_worker(nc, cfg):
+    IN = cfg.get("in_orderbook_subj", "market.orderbook")
+    OUT = cfg.get("out_cob_subj", "indicators.cob")
+
+    states: dict[str, BookState] = {}
+
+    async def on_msg(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            print("[COB_WORKER] error parseando JSON")
+            return
+
+        symbol = d.get("symbol") or d.get("eventSymbol")
+        if not symbol:
+            print("[COB_WORKER] ignorado: no hay symbol")
+            return
+
+        st = states.get(symbol)
+        if st is None:
+            st = BookState(symbol, max_depth=10)
+            states[symbol] = st
+            print(f"[COB_WORKER] creado estado nuevo para {symbol}")
+
+        kind = (d.get("kind") or "").lower()
+        if kind == "snapshot":
+            print(f"[COB_WORKER] recibido SNAPSHOT de {symbol}")
+            st.apply_snapshot(d)
+        elif kind == "update":
+            print(f"[COB_WORKER] recibido UPDATE de {symbol}")
+            st.apply_update(d)
+        else:
+            print(f"[COB_WORKER] recibido mensaje sin kind de {symbol}, infiriendo…")
+            if "bids" in d or "asks" in d or "bidLevels" in d or "askLevels" in d:
+                st.apply_snapshot(d)
+            else:
+                st.apply_update(d)
+
+        out = st.snapshot()
+        print(f"[COB_WORKER] publicando COB {out['id']} con {len(out['bids'])} bids / {len(out['asks'])} asks")
+        if out["ts"] > 0:
+            await nc.publish(OUT, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    sub = await nc.subscribe(IN, cb=on_msg)
+    await nc.flush()
+    try:
+        yield OUT
+    finally:
+        await sub.unsubscribe()
+        await nc.flush()
+
+
+@pytest_asyncio.fixture
+async def orderflow_worker(nc, cfg):
+    """
+    Worker Order Flow (agresivo): consume BBO + trades y publica delta BUY-SELL.
+    IN:
+      - bbo_subject         (default: "market.bbo")
+      - in_trades_subj      (o "in_subj")
+    OUT:
+      - out_orderflow_subj  (default: "indicators.orderflow")
+    Opcional:
+      - orderflow_reset_daily (bool, default True)
+
+    Publica:
+      {"indicator":"orderflow","delta":..., "buy":..., "sell":..., "symbol":..., "tf":..., "ts":...}
+    """
+    IN_BBO = cfg.get("bbo_subject") or "market.bbo"
+    IN_TRD = cfg.get("in_trades_subj") or cfg["in_subj"]
+    OUT    = cfg.get("out_orderflow_subj", "indicators.orderflow")
+
+    of = OrderFlowCalc(reset_daily=cfg.get("orderflow_reset_daily", True))
+
+    def _to_ms(ts):
+        # dxFeed time en nanos → ms
+        if isinstance(ts, (int, float)) and ts > 10**15:
+            return int(ts) // 1_000_000
+        return int(ts) if ts is not None else None
+
+    async def on_bbo(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            return
+        symbol = d.get("symbol") or d.get("eventSymbol")
+        tf     = d.get("tf") or cfg.get("tf") or "-"
+        ts     = _to_ms(d.get("ts") or d.get("time"))
+
+        # Campos BBO frecuentes (dxFeed u otros)
+        bid = d.get("bid")
+        ask = d.get("ask")
+        if bid is None: bid = d.get("bidPrice", d.get("bestBidPrice"))
+        if ask is None: ask = d.get("askPrice", d.get("bestAskPrice"))
+
+        if symbol is None or ts is None or (bid is None and ask is None):
+            return
+        of.on_bbo(symbol=symbol, ts=ts, bid=bid, ask=ask, tf=tf)
+
+    async def on_trade(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            return
+        symbol = d.get("symbol") or d.get("eventSymbol")
+        tf     = d.get("tf") or cfg.get("tf") or "-"
+        ts     = _to_ms(d.get("ts") or d.get("time"))
+        price  = d.get("price")
+        size   = d.get("size", d.get("quantity", 0))
+
+        # Señales de agresor si vienen en el trade
+        aggressor = d.get("aggressor") or d.get("side")  # "B"/"S", "BUY"/"SELL", etc.
+        is_buyer_initiator = d.get("isBuyerInitiator")
+        # Si solo viene isBidAggressor (nomenclatura ambigua), interpretamos:
+        # True => agresor en el lado bid (venta agresiva) ⇒ buyer_initiator = False
+        if is_buyer_initiator is None and "isBidAggressor" in d:
+            try:
+                is_buyer_initiator = not bool(d["isBidAggressor"])
+            except Exception:
+                pass
+
+        if symbol is None or ts is None or price is None or size is None:
+            return
+
+        snap = of.on_trade(
+            symbol=symbol, ts=ts, price=float(price), size=float(size), tf=tf,
+            aggressor=aggressor, is_buyer_initiator=is_buyer_initiator
+        )
+
+        out = {
+            "v": 1,
+            "source": "indicators-engine",
+            "symbol": symbol,
+            "tf": tf,
+            "ts": ts,
+            "indicator": "orderflow",
+            "delta": snap["delta"],
+            "buy": snap["buy"],
+            "sell": snap["sell"],
+            "id": f"{symbol}|{tf}|{ts}|orderflow",
+        }
+        await nc.publish(OUT, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    sub_bbo = await nc.subscribe(IN_BBO, cb=on_bbo)
+    sub_trd = await nc.subscribe(IN_TRD, cb=on_trade)
+    await nc.flush()
+    try:
+        yield OUT
+    finally:
+        await sub_bbo.unsubscribe()
+        await sub_trd.unsubscribe()
+        await nc.flush()
+
+
+@pytest_asyncio.fixture
+async def book_order_worker(nc, cfg):
+    """
+    Worker Book Order: emite TODOS los niveles L2 cuando recibe OrderBookSnapshot.
+    Ignora updates incrementales (para eso usa el COB incremental).
+    Usa subjects del pytest.ini:
+      - in_orderbook_subject (default: market.orderbook)
+      - out_book_order_subject (default: indicators.book_order)
+    """
+    IN = cfg.get("in_orderbook_subj", "market.orderbook")
+    OUT = cfg.get("out_book_order_subj", "indicators.book_order")
+
+    async def on_msg(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            print("[BOOK_ORDER_WORKER] JSON inválido")
+            return
+
+        kind = (d.get("kind") or "").lower()
+        # Solo snapshots: si no viene 'kind', inferimos snapshot si trae bids/asks
+        if kind not in ("snapshot", "") and not any(k in d for k in ("bids","asks","bidLevels","askLevels")):
+            return
+
+        out = normalize_dxfeed_book_order(d)
+        if not out:
+            print("[BOOK_ORDER_WORKER] snapshot no normalizable")
+            return
+
+        print(f"[BOOK_ORDER_WORKER] publicando {out['id']} depth(b/a)=({len(out['bids'])}/{len(out['asks'])})")
+        await nc.publish(OUT, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    print(f"[BOOK_ORDER_WORKER] subscribing IN={IN} OUT={OUT}")
+    sub = await nc.subscribe(IN, cb=on_msg)
+    await nc.flush()
+    try:
+        yield OUT
+    finally:
+        await sub.unsubscribe()
+        await nc.flush()
+
+@pytest_asyncio.fixture
+async def heatmap_worker(nc, cfg):
+    """
+    Worker Heatmap: escucha OrderBook (snapshot + updates) y publica frames sparse precio×tiempo.
+    IN:  in_orderbook_subj (dxFeed OrderBook/OrderBookSnapshot)
+    OUT: out_heatmap_subj  (default: indicators.heatmap)
+    """
+    IN  = cfg.get("in_orderbook_subj", "market.orderbook")
+    OUT = cfg.get("out_heatmap_subj", "indicators.heatmap")
+    symbol = cfg["symbol"]
+
+    state = HeatmapState(symbol, tick_size=float(cfg.get("poc_tick_size", 0.25)), bucket_ms=1000, max_prices=20)
+
+    async def on_msg(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            return
+
+        kind = (d.get("kind") or "").lower()
+        # inferencia básica si no viene 'kind'
+        is_snapshot_like = any(k in d for k in ("bids","asks","bidLevels","askLevels"))
+        if kind == "snapshot" or (kind == "" and is_snapshot_like):
+            state.apply_snapshot(d)
+        elif kind == "update" or not is_snapshot_like:
+            state.apply_update(d)
+        else:
+            return
+
+        out = state.frame()
+        await nc.publish(OUT, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    sub = await nc.subscribe(IN, cb=on_msg)
+    await nc.flush()
+    try:
+        yield OUT
+    finally:
+        await sub.unsubscribe()
+        await nc.flush()
+
+@pytest_asyncio.fixture
+async def liquidity_worker(nc, cfg):
+    """
+    Worker Liquidity:
+      - Escucha OrderBook (snapshot + updates)
+      - Mantiene estado y publica métricas de liquidez (depth & imbalance)
+    IN:  in_orderbook_subj (default: market.orderbook)
+    OUT: out_liquidity_subj (default: indicators.liquidity)
+    """
+    IN  = cfg.get("in_orderbook_subj", "market.orderbook")
+    OUT = cfg.get("out_liquidity_subj", "indicators.liquidity")
+    symbol = cfg["symbol"]
+
+    state = LiquidityState(symbol, depth_levels=int(cfg.get("liquidity_depth_levels", 10) or 10))
+
+    async def on_msg(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            return
+
+        kind = (d.get("kind") or "").lower()
+        is_snapshot_like = any(k in d for k in ("bids","asks","bidLevels","askLevels"))
+        if kind == "snapshot" or (kind == "" and is_snapshot_like):
+            state.apply_snapshot(d)
+        elif kind == "update" or not is_snapshot_like:
+            state.apply_update(d)
+        else:
+            return
+
+        out = state.snapshot()
+        if out["ts"] > 0:
+            await nc.publish(OUT, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
+
+    sub = await nc.subscribe(IN, cb=on_msg)
+    await nc.flush()
+    try:
+        yield OUT
+    finally:
+        await sub.unsubscribe()
+        await nc.flush()
+
+@pytest_asyncio.fixture
+async def volume_profile_worker(nc, cfg):
+    """
+    Worker Volume Profile: agrega volumen por precio en buckets temporales (tf).
+    IN:   in_trades_subj (o in_subj)
+    OUT:  out_vp_subj (default: indicators.vp)
+    Params opcionales:
+      - vp_tick_size (float, default 0.25; cae a poc_tick_size si existe)
+      - vp_tf (str, default cfg["tf"] o "1m")
+      - vp_max_buckets (int, default 5)
+    Publica:
+      {"indicator":"vp","symbol":...,"tf":...,"ts":<bucket_start>,
+       "tick_size":..., "vtotal":..., "bins":[{"price":..,"volume":..},...], "poc":...}
+    """
+    IN_SUBJ  = cfg.get("in_trades_subj") or cfg["in_subj"]
+    OUT_SUBJ = cfg.get("out_vp_subj", "indicators.vp")
+    tick_size = float(cfg.get("vp_tick_size", cfg.get("poc_tick_size", 0.25)))
+    tf = cfg.get("vp_tf") or cfg.get("tf") or cfg.get("candle_tf") or "1m"
+    max_buckets = int(cfg.get("vp_max_buckets", 5))
+
+    vp = VolumeProfileCalc(tick_size=tick_size, tf=tf, max_buckets=max_buckets)
+
+    def _to_ms(ts):
+        # dxFeed nanos → ms si hace falta
+        if isinstance(ts, (int, float)) and ts > 10**15:
+            return int(ts) // 1_000_000
+        return int(ts) if ts is not None else None
+
+    async def on_trade_msg(msg):
+        try:
+            d = orjson.loads(msg.data)
+        except Exception:
+            return
+
+        symbol = d.get("symbol") or d.get("eventSymbol")
+        tf_msg = d.get("tf") or tf
+        ts     = _to_ms(d.get("ts") or d.get("time"))
+        price  = d.get("price")
+        size   = d.get("size", d.get("quantity", 0))
+
+        if symbol is None or ts is None or price is None or size is None:
+            return
+
+        snap = vp.on_trade(symbol=symbol, ts=ts, price=float(price), size=float(size), tf=tf_msg)
+        out = {
+            "v": 1,
+            "source": "indicators-engine",
+            "symbol": symbol,
+            "tf": tf_msg,
+            "ts": snap["bucket_start"],  # inicio del bucket
+            "indicator": "vp",
+            "tick_size": tick_size,
+            "vtotal": snap["vtotal"],
+            "bins": snap["bins"],
+            "poc": snap["poc"],
+            "id": f"{symbol}|{tf_msg}|{snap['bucket_start']}|vp",
         }
         await nc.publish(OUT_SUBJ, orjson.dumps(out), headers={"Nats-Msg-Id": out["id"]})
 
