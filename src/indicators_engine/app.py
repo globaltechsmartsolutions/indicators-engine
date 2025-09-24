@@ -6,10 +6,10 @@ from .config import Config
 from .nats_io import connect_nats
 from .pipelines.rsi import RsiCalc
 
-IN_SUBJECT = "market.candles.1m"
-OUT_SUBJECT = "indicators.candles.1m.rsi10"
+IN_SUBJECT = "md.candles.*"
+OUT_SUBJECT = "indicators.candles.5m.rsi10"
 STREAM_NAME = "INDICATORS"
-STREAM_SUBJECTS = ["indicators.candles.1m.*"]
+STREAM_SUBJECTS = ["indicators.candles.5m.*"]
 
 async def main():
     cfg = Config()
