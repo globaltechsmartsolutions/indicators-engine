@@ -1,12 +1,6 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-def _to_ms(ts: int | float | None) -> int | None:
-    if ts is None:
-        return None
-    ts = int(ts)
-    # dxFeed suele entregar nanos
-    return ts // 1_000_000 if ts > 10**15 else ts
 
 def _levels_from_any(x: Any) -> List[Tuple[float, float]]:
     """
@@ -36,46 +30,30 @@ def _levels_from_any(x: Any) -> List[Tuple[float, float]]:
             out.append((p, s))
     return out
 
-def normalize_dxfeed_book_order(d: Dict[str, Any]) -> Dict[str, Any] | None:
-    """
-    Normaliza un OrderBookSnapshot de dxFeed a un mensaje 'book_order' con **todos los niveles L2**.
-    - No recorta profundidad.
-    - Orden: bids desc, asks asc.
-    Salida:
-    {
-      "v": 1, "source": "indicators-engine",
-      "symbol": str, "tf": "-", "ts": ms, "indicator": "book_order",
-      "bids": [[p, s], ...], "asks": [[p, s], ...],
-      "id": f"{symbol}|-|{ts}|book_order"
-    }
-    """
-    if not isinstance(d, dict):
-        return None
 
+def normalize_dxfeed_book_order(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # Corregido: aceptar tanto "symbol" como "eventSymbol"
     symbol = d.get("symbol") or d.get("eventSymbol")
-    ts = _to_ms(d.get("ts") or d.get("time"))
-    if not symbol or ts is None:
+    if not symbol:
         return None
-
-    bids_raw = d.get("bids") or d.get("bidLevels")
-    asks_raw = d.get("asks") or d.get("askLevels")
-
-    bids = _levels_from_any(bids_raw)
-    asks = _levels_from_any(asks_raw)
-
-    bids.sort(key=lambda x: x[0], reverse=True)
-    asks.sort(key=lambda x: x[0])
-
-    out = {
-        "v": 1,
-        "source": "indicators-engine",
+    bids = _levels_from_any(d.get("bids"))
+    asks = _levels_from_any(d.get("asks"))
+    return {
         "symbol": symbol,
-        "tf": "-",
-        "ts": ts,
-        "indicator": "book_order",
-        "bids": [[p, s] for p, s in bids],
-        "asks": [[p, s] for p, s in asks],
-        "id": f"{symbol}|-|{ts}|book_order",
+        "ts": d.get("eventTime", d.get("ts")),
+        "bids": sorted(bids, key=lambda x: -x[0]),
+        "asks": sorted(asks, key=lambda x: x[0]),
     }
-    print(f"[BOOK_ORDER] snapshot normalizado: symbol={symbol} ts={ts} depth(b/a)=({len(bids)}/{len(asks)})")
-    return out
+
+
+def normalize_dxfeed_book_update(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # Corregido: aceptar tanto "symbol" como "eventSymbol"
+    symbol = d.get("symbol") or d.get("eventSymbol")
+    if not symbol:
+        return None
+    return {
+        "symbol": symbol,
+        "ts": d.get("eventTime", d.get("ts")),
+        "bids": _levels_from_any(d.get("bids")),
+        "asks": _levels_from_any(d.get("asks")),
+    }
