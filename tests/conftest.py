@@ -4,11 +4,11 @@ import orjson
 import asyncio, pytest, pytest_asyncio
 from nats.aio.client import Client as NatsClient
 
-from indicators_engine.pipelines.rsi import RsiCalc
-from indicators_engine.pipelines.macd import MacdCalc
-from indicators_engine.pipelines.adx import AdxCalc
+from indicators_engine.indicators.classic.rsi import RsiCalc
+from indicators_engine.indicators.classic.macd import MacdCalc
+from indicators_engine.indicators.classic.adx import AdxCalc
 from indicators_engine.pipelines.cvd import CvdCalc
-from indicators_engine.pipelines.vwap import VwapCalc
+from indicators_engine.indicators.classic.vwap_bar import VwapCalc
 from indicators_engine.pipelines.poc import PocCalc
 from indicators_engine.pipelines.cob_state import BookState
 from indicators_engine.pipelines.orderflow import OrderFlowCalc

@@ -1,4 +1,4 @@
-from indicators_engine.pipelines.rsi import RsiCalc
+from indicators_engine.indicators.classic.rsi import RsiCalc
 
 def test_rsi_calc_basic():
     rsi = RsiCalc(period=14)
