@@ -31,8 +31,11 @@ class SessionVolumeProfile(StreamIndicator, TsOrderedMixin):
         self.reset()
 
     def reset(self) -> None:
-        self._session_id: Optional[Hashable] = None
-        self._bins: Dict[float, float] = {}
+        # ── AHORA: estado por símbolo ───────────────────────────────────────────
+        self._session_by_sym: Dict[str, Hashable] = {}
+        self._bins_by_sym: Dict[str, Dict[float, float]] = {}
+        # Para compatibilidad: último símbolo visto si no se pasa 'symbol' en snapshot*
+        self._last_symbol: Optional[str] = None
 
     # ---- cuantización ----
     def _step(self) -> float:
@@ -43,17 +46,25 @@ class SessionVolumeProfile(StreamIndicator, TsOrderedMixin):
         # cuantiza al múltiplo más cercano de s, con redondeo estable
         return round(round(price / s) * s, 10)
 
-    def _roll_if_needed(self, ts: int) -> None:
+    def _roll_if_needed(self, sym: str, ts: int) -> None:
         sid = self.cfg.session_key_fn(ts)
-        if sid != self._session_id:
-            self._session_id = sid
-            self._bins.clear()
+        if self._session_by_sym.get(sym) != sid:
+            self._session_by_sym[sym] = sid
+            self._bins_by_sym[sym] = {}
+
+    def _bins(self, sym: str) -> Dict[float, float]:
+        return self._bins_by_sym.setdefault(sym, {})
 
     # ---- API ----
     def on_bar(self, bar: Bar) -> Optional[dict]:
+        # orden temporal (si aplica)
         if not self.allow_ts(bar.ts):
             return None
-        self._roll_if_needed(bar.ts)
+        sym = getattr(bar, "symbol", None)
+        if not sym:
+            return None
+        self._last_symbol = sym
+        self._roll_if_needed(sym, bar.ts)
 
         vol = bar.volume if is_finite(bar.volume) else 0.0
         if vol <= 0.0:
@@ -70,30 +81,39 @@ class SessionVolumeProfile(StreamIndicator, TsOrderedMixin):
             return None
 
         b = self._bin_for(px)
-        self._bins[b] = self._bins.get(b, 0.0) + vol
+        bins = self._bins(sym)
+        bins[b] = bins.get(b, 0.0) + float(vol)
         return None  # snapshot bajo demanda
 
     def on_trade(self, trade: Trade) -> Optional[dict]:
-        self._roll_if_needed(trade.ts)
+        sym = getattr(trade, "symbol", None)
+        if not sym:
+            return None
+        self._last_symbol = sym
+        self._roll_if_needed(sym, trade.ts)
+
         if not (is_finite(trade.price) and is_finite(trade.size)):
             return None
         b = self._bin_for(trade.price)
-        self._bins[b] = self._bins.get(b, 0.0) + float(trade.size)
+        bins = self._bins(sym)
+        bins[b] = bins.get(b, 0.0) + float(trade.size)
         return None
 
     # ---- snapshots ----
-    def snapshot(self) -> dict:
-        items = sorted(self._bins.items())
+    def snapshot(self, symbol: Optional[str] = None) -> dict:
+        sym = symbol or self._last_symbol
+        items = sorted(self._bins_by_sym.get(sym, {}).items())
         if not items:
-            return {"bins": [], "total_v": 0.0, "poc": None}
+            return {"symbol": sym, "bins": [], "total_v": 0.0, "poc": None}
 
         poc_price, poc_vol = max(items, key=lambda kv: kv[1])
         total_v = float(sum(v for _, v in items))
-        return {"bins": items, "total_v": total_v, "poc": (poc_price, poc_vol)}
+        return {"symbol": sym, "bins": items, "total_v": total_v, "poc": (poc_price, poc_vol)}
 
-    def snapshot_top(self, n: Optional[int] = None) -> List[Tuple[float, float]]:
+    def snapshot_top(self, n: Optional[int] = None, symbol: Optional[str] = None) -> List[Tuple[float, float]]:
         n = n if n is not None else self.cfg.top_n
-        items = sorted(self._bins.items(), key=lambda kv: kv[1], reverse=True)
+        sym = symbol or self._last_symbol
+        items = sorted(self._bins_by_sym.get(sym, {}).items(), key=lambda kv: kv[1], reverse=True)
         return items[:n] if (n and n > 0) else items
 
 

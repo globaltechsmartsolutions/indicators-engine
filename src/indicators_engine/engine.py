@@ -99,7 +99,6 @@ class IndicatorsEngine:
         self.cvd = CVD()
         self.liquidity = Liquidity(LiquidityConfig(depth_levels=10))
         self.heatmap   = Heatmap(HeatmapConfig(bucket_ms=1000, tick_size=0.01))
-
         self.svp = SVP(SVPConfig(session_key_fn=session_key_utc_day, tick_size=0.01, top_n=10))
         self.volprof = VolumeProfile()
 
@@ -128,7 +127,7 @@ class IndicatorsEngine:
             await self.pub.publish_candle(bar.tf, name, bar.symbol, {"ts": bar.ts, **adx_out})
 
         _ = self.svp.on_bar(bar)
-        svp_top = self.svp.snapshot_top()
+        svp_top = self.svp.snapshot_top(symbol=bar.symbol)  # ← cambio clave
         if svp_top:
             payload = {"ts": bar.ts, "top": svp_top}
             await self.ui.update(bar.symbol, "svp", payload, bar.ts, bar.tf)
