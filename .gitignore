@@ -1,11 +1,65 @@
-# Python
+﻿# Byte-compiled / cache
 __pycache__/
-*.pyc
-.venv/
-.env
+*.py[cod]
+*.class
 
-# Editor/OS
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Unit test / coverage
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+htmlcov/
+.tox/
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+
+# IDE / Editor
 .idea/
 .vscode/
+
+# OS
 .DS_Store
 Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+
+# Secrets / env
+.env
+*.env
+*.secret
+*.key
+*.pem
