@@ -63,3 +63,6 @@ Thumbs.db
 *.secret
 *.key
 *.pem
+
+# Rust
+target/

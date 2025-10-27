@@ -1,17 +1,34 @@
 [project]
 name = "indicators-engine"
 version = "0.1.0"
-description = "Calculador de indicadores técnicos desde dxFeed via NATS"
+description = "Calculador de indicadores técnicos desde dxFeed via NATS (Híbrido Python-Rust)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    # Mensajería y datos
     "nats-py>=2.6.0",
     "orjson>=3.10.7",
     "pydantic>=2.8.2",
+    
+    # DataFrames y álgebra
     "pandas>=2.2.2",
     "numpy>=1.26.4",
-    "ta>=0.11.0"
+    "polars>=0.40",  # Para VWAP eficiente
+    
+    # Indicadores técnicos
+    "ta>=0.11.0",
+    "ta-lib>=0.4",  # Para indicadores clásicos
+    
+    # Puente Rust (compilado como extensión, no depende de PyO3 en Python)
 ]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.setuptools-rust]
+binding = "pyo3"
+py-limited-api = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

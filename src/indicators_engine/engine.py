@@ -8,14 +8,13 @@ from indicators_engine.core.types import Bar, Trade, BookSnapshot
 from indicators_engine.logs.liveRenderer import LiveRenderer
 from indicators_engine.nats.publisher import IndicatorPublisher
 
-# Indicadores
+# Engine Híbrido (Rust + Python fallback)
+from indicators_engine.hybrid_engine import HybridIndicatorEngine
+
+# Indicadores Python (solo los que NO están en Rust)
 from indicators_engine.indicators.classic.rsi import RSI
 from indicators_engine.indicators.classic.macd import MACD
 from indicators_engine.indicators.classic.adx import ADX
-from indicators_engine.indicators.volume.vwap_cum import VWAPCum, VWAPCumConfig
-from indicators_engine.indicators.book.liquidity import Liquidity, LiquidityConfig
-from indicators_engine.indicators.book.heatmap import Heatmap, HeatmapConfig
-from indicators_engine.indicators.orderflow.cvd import CVD
 from indicators_engine.indicators.volume.svp import SVP, SVPConfig
 from indicators_engine.indicators.volume.volume_profile import VolumeProfile
 
@@ -91,14 +90,13 @@ class IndicatorsEngine:
         self.pub = publisher
         self.ui = renderer
 
-        # Instancias (ajusta si tus ctors varían)
+        # Engine Híbrido: usa Rust cuando está disponible, Python como fallback
+        self.hybrid = HybridIndicatorEngine()
+
+        # Indicadores Python puros (sin equivalente Rust)
         self.rsi = RSI()
         self.macd = MACD()
         self.adx = ADX()
-        self.vwap = VWAPCum(VWAPCumConfig(session_key_fn=None))
-        self.cvd = CVD()
-        self.liquidity = Liquidity(LiquidityConfig(depth_levels=10))
-        self.heatmap   = Heatmap(HeatmapConfig(bucket_ms=1000, tick_size=0.01))
         self.svp = SVP(SVPConfig(session_key_fn=session_key_utc_day, tick_size=0.01, top_n=10))
         self.volprof = VolumeProfile()
 
@@ -152,15 +150,27 @@ class IndicatorsEngine:
             )
             return
 
-        vwap_val = self.vwap.on_trade(tr)
-        if vwap_val is not None:
-            await self.ui.update(tr.symbol, "vwap", vwap_val, tr.ts, "-")
-            await self.pub.publish_trades("vwap", tr.symbol, {"ts": tr.ts, "vwap": float(vwap_val)})
+        # VWAP y CVD: usar engine híbrido (Rust o Python fallback)
+        trade_data = {
+            "ts": tr.ts,
+            "price": tr.price,
+            "size": tr.size,
+            "symbol": tr.symbol,
+            "side": tr.side,
+            "exchange": tr.exchange,
+        }
+        
+        # VWAP
+        vwap_result = self.hybrid.calculate_vwap(trade_data)
+        if vwap_result:
+            await self.ui.update(tr.symbol, "vwap", vwap_result.value, tr.ts, "-")
+            await self.pub.publish_trades("vwap", tr.symbol, {"ts": tr.ts, "vwap": float(vwap_result.value)})
 
-        cvd_out = self.cvd.on_trade(tr)
-        if cvd_out:
-            await self.ui.update(tr.symbol, "cvd", cvd_out, tr.ts, "-")
-            await self.pub.publish_trades("cvd", tr.symbol, {"ts": tr.ts, **cvd_out})
+        # CVD
+        cvd_result = self.hybrid.calculate_cvd(trade_data)
+        if cvd_result:
+            await self.ui.update(tr.symbol, "cvd", {"cvd": cvd_result.value}, tr.ts, "-")
+            await self.pub.publish_trades("cvd", tr.symbol, {"ts": tr.ts, "cvd": float(cvd_result.value)})
 
     # --- NUEVO: frames agregados de order flow ---
     async def on_oflow_frame_dict(self, d: Dict[str, Any]) -> None:
@@ -198,13 +208,23 @@ class IndicatorsEngine:
 
     async def on_book_dict(self, d: Dict[str, Any]) -> None:
         snap = parse_book(d)
+        
+        # Convertir a formato dict para el hybrid engine
+        book_data = {
+            "ts": snap.ts,
+            "symbol": snap.symbol,
+            "bids": [{"price": float(l["p"]), "size": float(l["v"])} for l in snap.bids],
+            "asks": [{"price": float(l["p"]), "size": float(l["v"])} for l in snap.asks],
+        }
 
-        liq = self.liquidity.on_snapshot(snap)
-        if liq:
-            await self.ui.update(snap.symbol, "liquidity", liq, snap.ts, "-")
-            await self.pub.publish_book("liquidity", snap.symbol, {"ts": snap.ts, **liq})
+        # Liquidity: usar engine híbrido
+        liq_result = self.hybrid.calculate_liquidity(book_data)
+        if liq_result:
+            await self.ui.update(snap.symbol, "liquidity", liq_result.value, snap.ts, "-")
+            await self.pub.publish_book("liquidity", snap.symbol, {"ts": snap.ts, **liq_result.value})
 
-        hm = self.heatmap.on_snapshot(snap)
-        if hm:
-            await self.ui.update(snap.symbol, "heatmap", hm, snap.ts, "-")
-            await self.pub.publish_book("heatmap", snap.symbol, {"ts": snap.ts, **hm})
+        # Heatmap: usar engine híbrido
+        hm_result = self.hybrid.calculate_heatmap(book_data)
+        if hm_result:
+            await self.ui.update(snap.symbol, "heatmap", hm_result.value, snap.ts, "-")
+            await self.pub.publish_book("heatmap", snap.symbol, {"ts": snap.ts, **hm_result.value})
