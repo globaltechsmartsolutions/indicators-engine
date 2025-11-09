@@ -17,26 +17,23 @@ Python (Orquestación) ← → Rust (Alto Rendimiento)
 ### Requisitos
 - Python 3.12+
 - Rust (cargo)
-- `.venv` activo
+- Entorno virtual compartido en la raíz (`GLOBALTECH\.venv`)
 
 ### Pasos
 
 ```powershell
-# 1. Crear .venv (si no existe)
-python -m venv .venv
+# 1. Preparar entorno compartido (desde la raíz del monorepo)
+cd ..
+.\setup_common_env.bat
 
-# 2. Activar .venv
-.venv\Scripts\activate
-
-# 3. Instalar maturin
-pip install maturin
-
-# 4. Compilar e instalar módulo Rust
+# 2. (Opcional) Compilar e instalar módulo Rust
 cd rust-core
 maturin develop --release
 cd ..
 
-# 5. Verificar
+# 3. Verificar
+# (activando previamente el entorno compartido si no lo está)
+call ..\.venv\Scripts\activate
 python -c "import indicators_core; print('✅ Rust instalado')"
 ```
 
@@ -98,7 +95,7 @@ print(f'CVD: {result.cvd}')
 ## 🧹 Limpieza de Proyecto
 
 Proyecto limpio sin archivos innecesarios:
-- ✅ Un solo `.venv` en la raíz
+- ✅ Un solo `.venv` en la raíz (`GLOBALTECH\.venv`)
 - ✅ Sin `.venv` en `rust-core/`
 - ✅ Sin archivos `.bat` innecesarios
 - ✅ Documentación consolidada
@@ -107,7 +104,6 @@ Proyecto limpio sin archivos innecesarios:
 
 ```
 indicators-engine/
-├── .venv/                    # Entorno Python
 ├── rust-core/               # Código Rust
 │   ├── src/
 │   │   ├── indicators/      # Engines (CVD, Liquidity, Heatmap, VWAP)
@@ -182,27 +178,28 @@ cargo build --release  # NO necesita .venv
 
 ### Instalar en Python
 ```bash
-# Detectar .venv activo
+# Activar entorno compartido
+call ..\.venv\Scripts\activate
 cd rust-core
 maturin develop --release  # SÍ necesita .venv activo
 ```
 
 ### Diferencia
-- **Compilar**: `cargo` (Rust, no usa .venv)
-- **Instalar**: `maturin` (Python, SÍ usa .venv)
-- **Razón**: Python solo importa módulos de su path (.venv)
+- **Compilar**: `cargo` (Rust, no usa `.venv`)
+- **Instalar**: `maturin` (Python, SÍ usa el `.venv` compartido)
+- **Razón**: Python solo importa módulos de su path (`GLOBALTECH\.venv`)
 
 ## 🎯 Estado Actual
 
 - ✅ **Rust compilado y funcionando**
-- ✅ **Instalado en .venv con maturin**
+- ✅ **Instalado en `GLOBALTECH\.venv` con maturin**
 - ✅ **Hybrid Indicator Engine operativo**
 - ✅ **Todas las integraciones verificadas**
 
 ## 📚 Documentación Adicional
 
 - `pyproject.toml` - Configuración del paquete
-- `.venv/` - Entorno virtual con módulo Rust instalado
+- `GLOBALTECH\.venv/` - Entorno virtual compartido con módulo Rust instalado
 
 ## ⚙️ Configuración
 

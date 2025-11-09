@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable, Any, Mapping
 
 from .types import Bar
+from indicators_engine.logs.logger import get_logger
+logger = get_logger(__name__)
 
 
 # ========= Interfaces base (para uniformidad y testeo) =========

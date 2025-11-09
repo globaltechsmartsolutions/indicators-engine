@@ -7,19 +7,19 @@ Engine híbrido que usa Rust cuando está disponible, con fallback automático a
 import logging
 from typing import Optional, Dict, Any, Union
 from dataclasses import dataclass
+from indicators_engine.logs.logger import get_logger
 
-# Configurar logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Intentar importar el módulo Rust
 try:
     import indicators_core
     RUST_AVAILABLE = True
-    logger.info("✅ Rust core disponible")
+    logger.info("Rust core disponible")
 except ImportError as e:
     RUST_AVAILABLE = False
-    logger.warning(f"⚠️ Rust core no disponible: {e}")
-    logger.info("🔄 Usando implementación Python como fallback")
+    logger.warning(f"Rust core no disponible: {e}")
+    logger.info("Usando implementación Python como fallback")
 
 @dataclass
 class IndicatorResult:
@@ -50,9 +50,9 @@ class HybridIndicatorEngine:
                 self.rust_liquidity = indicators_core.LiquidityEngine()
                 self.rust_heatmap = indicators_core.HeatmapEngine()
                 self.rust_vwap = indicators_core.VWAPEngine()
-                logger.info("✅ Engines Rust inicializados")
+                logger.info("Engines Rust inicializados")
             except Exception as e:
-                logger.error(f"❌ Error inicializando engines Rust: {e}")
+                logger.error(f"Error inicializando engines Rust: {e}")
                 self.rust_available = False
         
         # Inicializar engines Python como fallback
@@ -63,7 +63,7 @@ class HybridIndicatorEngine:
         # NOTA: Los indicadores CVD, Liquidity, Heatmap y VWAP ahora son solo Rust
         # Si Rust no está disponible, estos indicadores no funcionarán
         if not self.rust_available:
-            logger.warning("⚠️ Indicadores Rust no disponibles. Compila Rust con: cd rust-core && cargo build --release")
+            logger.warning("Indicadores Rust no disponibles. Compila Rust con: cd rust-core && cargo build --release")
             self.python_cvd = None
             self.python_liquidity = None
             self.python_heatmap = None
@@ -107,10 +107,10 @@ class HybridIndicatorEngine:
                         source="rust"
                     )
             except Exception as e:
-                logger.warning(f"⚠️ Error en CVD Rust: {e}, usando Python")
+                logger.warning(f"Error en CVD Rust: {e}, usando Python")
         
         # Fallback: CVD ahora solo está en Rust
-        logger.error("❌ CVD requiere Rust. Compila con: cd rust-core && cargo build --release")
+        logger.error("CVD requiere Rust. Compila con: cd rust-core && cargo build --release")
         return None
     
     def calculate_liquidity(self, book_data: Dict[str, Any]) -> Optional[IndicatorResult]:
@@ -139,10 +139,10 @@ class HybridIndicatorEngine:
                         source="rust"
                     )
             except Exception as e:
-                logger.warning(f"⚠️ Error en Liquidity Rust: {e}, usando Python")
+                logger.warning(f"Error en Liquidity Rust: {e}, usando Python")
         
         # Fallback: Liquidity ahora solo está en Rust
-        logger.error("❌ Liquidity requiere Rust. Compila con: cd rust-core && cargo build --release")
+        logger.error("Liquidity requiere Rust. Compila con: cd rust-core && cargo build --release")
         return None
     
     def calculate_heatmap(self, book_data: Dict[str, Any]) -> Optional[IndicatorResult]:
@@ -170,10 +170,10 @@ class HybridIndicatorEngine:
                         source="rust"
                     )
             except Exception as e:
-                logger.warning(f"⚠️ Error en Heatmap Rust: {e}, usando Python")
+                logger.warning(f"Error en Heatmap Rust: {e}, usando Python")
         
         # Fallback: Heatmap ahora solo está en Rust
-        logger.error("❌ Heatmap requiere Rust. Compila con: cd rust-core && cargo build --release")
+        logger.error("Heatmap requiere Rust. Compila con: cd rust-core && cargo build --release")
         return None
     
     def calculate_vwap(self, trade_data: Dict[str, Any]) -> Optional[IndicatorResult]:
@@ -201,10 +201,10 @@ class HybridIndicatorEngine:
                         source="rust"
                     )
             except Exception as e:
-                logger.warning(f"⚠️ Error en VWAP Rust: {e}, usando Python")
+                logger.warning(f"Error en VWAP Rust: {e}, usando Python")
         
         # Fallback: VWAP ahora solo está en Rust
-        logger.error("❌ VWAP requiere Rust. Compila con: cd rust-core && cargo build --release")
+        logger.error("VWAP requiere Rust. Compila con: cd rust-core && cargo build --release")
         return None
     
     def get_status(self) -> Dict[str, Any]:

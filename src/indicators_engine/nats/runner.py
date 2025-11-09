@@ -1,16 +1,9 @@
 from __future__ import annotations
-import asyncio, os, logging
+import asyncio, os
 
-from indicators_engine.logs.liveRenderer import LiveRenderer
 from indicators_engine.nats.publisher import IndicatorPublisher
 from indicators_engine.nats.subscriber import NATSSubscriber
 from indicators_engine.engine import IndicatorsEngine
-
-log = logging.getLogger("runner")
-logging.basicConfig(
-    level=getattr(logging, os.getenv("ENGINE_LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format="%(asctime)s %(levelname)-7s [runner] %(message)s",
-)
 
 async def main():
     ini = os.getenv("ENGINE_INI", "settings.ini")
@@ -20,8 +13,7 @@ async def main():
     await sub.connect()
 
     pub = IndicatorPublisher(sub.nc, out_prefix=_read_out_prefix(ini))
-    ui  = LiveRenderer(fps=4.0)
-    eng = IndicatorsEngine(pub, ui)
+    eng = IndicatorsEngine(pub)
 
     # Wirear callbacks
     sub.cb_candle = eng.on_candle_dict
@@ -29,12 +21,11 @@ async def main():
     sub.cb_oflow  = eng.on_oflow_frame_dict # md.trades.oflow   ← NUEVO
     sub.cb_book   = eng.on_book_dict
 
-    # Lanzar renderer y subscriber
-    renderer_task = asyncio.create_task(ui.run())
+    # Lanzar subscriber (sin renderer)
     try:
         await sub.run()
     finally:
-        renderer_task.cancel()
+        pass
 
 def _read_out_prefix(ini_path: str) -> str:
     import configparser

@@ -1,69 +1,123 @@
-from indicators_engine.pipelines.volume_profile import VolumeProfileCalc
+from indicators_engine.indicators.volume.volume_profile import VolumeProfile, VolumeProfileConfig
+from indicators_engine.core.types import Bar
 
 def _print_snapshot(tag, snap):
-    bins_str = ", ".join([f"{b['price']}: {b['volume']}" for b in snap["bins"]])
-    print(f"[{tag}] bucket_start={snap['bucket_start']}  VTOTAL={snap['vtotal']}  POC={snap['poc']}  BINS={{ {bins_str} }}")
+    bins_str = ", ".join([f"{b[0]}: {b[1]}" for b in snap["bins"]])
+    print(f"[{tag}] VTOTAL={snap['total_v']}  BINS={{ {bins_str} }}")
 
-def test_vp_same_bucket_accumulation():
-    print("\n[TEST] Volume Profile acumulación en mismo bucket (1m)")
-    vp = VolumeProfileCalc(tick_size=0.25, tf="1m", max_buckets=3)
-    sym, tf = "ESZ5", "1m"
-    ts0 = 1_700_000_000_000  # ms
+def test_vp_basic_accumulation():
+    """Test Volume Profile basic accumulation"""
+    print("\n[TEST] Volume Profile basic accumulation")
+    vp = VolumeProfile(VolumeProfileConfig(tick_size=0.25))
+    
+    sym = "ESZ5"
+    ts0 = 1_700_000_000_000
+    
+    # Bar 1: price 100.00, volume 2
+    bar1 = Bar(
+        ts=ts0,
+        symbol=sym,
+        tf="1m",
+        open=100.0,
+        high=100.1,
+        low=99.9,
+        close=100.0,
+        volume=2.0
+    )
+    vp.on_bar(bar1)
+    snap1 = vp.snapshot()
+    _print_snapshot("AFTER#1", snap1)
+    assert snap1["total_v"] == 2.0
+    
+    # Bar 2: price 100.25, volume 1
+    bar2 = Bar(
+        ts=ts0 + 60_000,
+        symbol=sym,
+        tf="1m",
+        open=100.25,
+        high=100.3,
+        low=100.2,
+        close=100.25,
+        volume=1.0
+    )
+    vp.on_bar(bar2)
+    snap2 = vp.snapshot()
+    _print_snapshot("AFTER#2", snap2)
+    assert snap2["total_v"] == 3.0
+    
+    # Bar 3: another 100.25, volume 2
+    bar3 = Bar(
+        ts=ts0 + 120_000,
+        symbol=sym,
+        tf="1m",
+        open=100.25,
+        high=100.3,
+        low=100.2,
+        close=100.25,
+        volume=2.0
+    )
+    vp.on_bar(bar3)
+    snap3 = vp.snapshot()
+    _print_snapshot("AFTER#3", snap3)
+    assert snap3["total_v"] == 5.0
+    
+    # Check bins
+    bins_dict = dict(snap3["bins"])
+    assert bins_dict.get(100.0, 0) == 2.0  # volume at 100.0
+    assert bins_dict.get(100.25, 0) == 3.0  # volume at 100.25
 
-    # Alinear al inicio de minuto para no cruzar de bucket
-    b0 = (ts0 // 60_000) * 60_000
+def test_vp_top_n():
+    """Test Volume Profile snapshot_top method"""
+    vp = VolumeProfile(VolumeProfileConfig(tick_size=0.25, top_n=2))
+    
+    sym = "TEST"
+    ts0 = 1_700_000_000_000
+    
+    # Add multiple bars with different prices
+    for i, price in enumerate([100.0, 100.25, 100.5, 100.75]):
+        bar = Bar(
+            ts=ts0 + i * 60_000,
+            symbol=sym,
+            tf="1m",
+            open=price,
+            high=price + 0.1,
+            low=price - 0.1,
+            close=price,
+            volume=1.0 + i
+        )
+        vp.on_bar(bar)
+    
+    top = vp.snapshot_top(n=2)
+    assert len(top) <= 2
+    assert len(top) > 0
+    
+    # Top should be sorted by volume descending
+    if len(top) > 1:
+        assert top[0][1] >= top[1][1], "Top levels should be sorted by volume"
 
-    # 3 trades dentro del MISMO minuto
-    s1 = vp.on_trade(symbol=sym, ts=b0 + 1_000,  price=100.00, size=2, tf=tf)
-    _print_snapshot("AFTER#1", s1)
-    s2 = vp.on_trade(symbol=sym, ts=b0 + 20_000, price=100.25, size=1, tf=tf)
-    _print_snapshot("AFTER#2", s2)
-    s3 = vp.on_trade(symbol=sym, ts=b0 + 39_000, price=100.25, size=2, tf=tf)  # < 60s para no cambiar de bucket
-    _print_snapshot("AFTER#3", s3)
+def test_vp_empty():
+    """Test Volume Profile with no data"""
+    vp = VolumeProfile(VolumeProfileConfig())
+    snap = vp.snapshot()
+    assert snap["bins"] == []
+    assert snap["total_v"] == 0
 
-    assert s1["bucket_start"] == s2["bucket_start"] == s3["bucket_start"] == b0
-    assert s3["vtotal"] == 5.0
-    prices = [b["price"] for b in s3["bins"]]
-    vols    = [b["volume"] for b in s3["bins"]]
-    assert set(prices) == {100.00, 100.25}
-    assert set(vols) == {2.0, 3.0}
-    assert s3["poc"] == 100.25
-
-def test_vp_bucket_rollover_and_storage():
-    print("\n[TEST] Volume Profile cambio de bucket y almacenamiento (sin asumir eviction)")
-    vp = VolumeProfileCalc(tick_size=0.25, tf="1m", max_buckets=2)
-    sym, tf = "ESZ5", "1m"
-    base = 1_700_000_000_000
-
-    # Bucket A
-    s1 = vp.on_trade(symbol=sym, ts=base + 10_000, price=100.00, size=2, tf=tf)
-    _print_snapshot("BUCKET_A_AFTER#1", s1)
-
-    # Bucket B (siguiente minuto)
-    tsB = base + 60_000 + 5_000
-    s2 = vp.on_trade(symbol=sym, ts=tsB, price=100.25, size=3, tf=tf)
-    _print_snapshot("BUCKET_B_AFTER#1", s2)
-
-    # Bucket C (otro minuto más)
-    tsC = base + 2*60_000 + 5_000
-    s3 = vp.on_trade(symbol=sym, ts=tsC, price=100.50, size=1, tf=tf)
-    _print_snapshot("BUCKET_C_AFTER#1", s3)
-
-    # Recuperar B y C; comprobar que sus perfiles son correctos
-    b_ts = ((base + 60_000) // 60_000) * 60_000
-    c_ts = ((base + 120_000) // 60_000) * 60_000
-
-    snapB = vp.get_bucket(symbol=sym, bucket_ts=b_ts, tf=tf)
-    _print_snapshot("GET_BUCKET_B", snapB)
-    snapC = vp.get_bucket(symbol=sym, bucket_ts=c_ts, tf=tf)
-    _print_snapshot("GET_BUCKET_C", snapC)
-
-    assert snapB["vtotal"] == 3.0 and snapB["poc"] == 100.25
-    assert snapC["vtotal"] == 1.0 and snapC["poc"] == 100.50
-
-    # Nota: algunas implementaciones expulsan el bucket A (eviction por max_buckets=2)
-    # Otras lo mantienen en memoria histórica. Por eso NO lo forzamos aquí.
-    a_ts = (base // 60_000) * 60_000
-    snapA = vp.get_bucket(symbol=sym, bucket_ts=a_ts, tf=tf)
-    _print_snapshot("GET_BUCKET_A (informativo)", snapA)
-    # No hay assert sobre A para ser compatible con ambas variantes.
+def test_vp_bar_mode_close():
+    """Test Volume Profile with close mode"""
+    vp = VolumeProfile(VolumeProfileConfig(bar_mode="close"))
+    
+    bar = Bar(
+        ts=1_700_000_000_000,
+        symbol="TEST",
+        tf="1m",
+        open=99.0,
+        high=101.0,
+        low=98.0,
+        close=100.0,
+        volume=10.0
+    )
+    vp.on_bar(bar)
+    snap = vp.snapshot()
+    # In close mode, all volume goes to close price bin
+    bins_dict = dict(snap["bins"])
+    assert bins_dict[100.0] == 10.0

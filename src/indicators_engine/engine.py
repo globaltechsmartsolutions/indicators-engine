@@ -5,8 +5,14 @@ from collections import defaultdict
 import logging
 
 from indicators_engine.core.types import Bar, Trade, BookSnapshot
-from indicators_engine.logs.liveRenderer import LiveRenderer
 from indicators_engine.nats.publisher import IndicatorPublisher
+from indicators_engine.logs.logger import get_logger
+
+logger = get_logger(__name__)
+# Puedes usar ejemplos:
+# logger.info('Motor iniciado')
+# logger.debug(f'Parámetros: {params}')
+# logger.error('Ocurrió un error', exc_info=True)
 
 # Engine Híbrido (Rust + Python fallback)
 from indicators_engine.hybrid_engine import HybridIndicatorEngine
@@ -73,22 +79,53 @@ def parse_trade(d: Dict[str, Any]) -> Trade:
     )
 
 def parse_book(d: Dict[str, Any]) -> BookSnapshot:
+    """
+    Parsea un mensaje de book a BookSnapshot.
+    Acepta múltiples formatos:
+    - L2 frame: bids=[{"p": float, "v": float}, ...], asks=[...]
+    - Book frame: b1={"p": float, "v": float}, a1={...}
+    - BBO frame: bid=float, bidSize=float, ask=float, askSize=float
+    """
+    bids = []
+    asks = []
+    
+    # Formato 1: L2 frame o book completo con arrays bids/asks
+    if "bids" in d and "asks" in d:
+        bids = [{"p": float(x["p"]), "v": float(x["v"])} for x in d.get("bids", [])]
+        asks = [{"p": float(x["p"]), "v": float(x["v"])} for x in d.get("asks", [])]
+    # Formato 2: Book frame con b1/a1 (primer nivel como objeto)
+    elif "b1" in d or "a1" in d:
+        if "b1" in d:
+            b1 = d["b1"]
+            bids = [{"p": float(b1["p"]), "v": float(b1["v"])}]
+        if "a1" in d:
+            a1 = d["a1"]
+            asks = [{"p": float(a1["p"]), "v": float(a1["v"])}]
+    # Formato 3: BBO frame con bid/ask individuales
+    elif "bid" in d and "ask" in d:
+        bids = [{"p": float(d["bid"]), "v": float(d.get("bidSize", 0.0))}]
+        asks = [{"p": float(d["ask"]), "v": float(d.get("askSize", 0.0))}]
+    else:
+        raise ValueError(
+            f"Formato de book desconocido. Campos disponibles: {list(d.keys())}. "
+            "Esperado: bids/asks (arrays), b1/a1 (objetos), o bid/ask (valores)"
+        )
+    
     return BookSnapshot(
         ts=int(d["ts"]),
         symbol=str(d["symbol"]),
-        bids=[{"p": float(x["p"]), "v": float(x["v"])} for x in d.get("bids", [])],
-        asks=[{"p": float(x["p"]), "v": float(x["v"])} for x in d.get("asks", [])],
+        bids=bids,
+        asks=asks,
     )
 
 
 class IndicatorsEngine:
     """
-    Recibe datos crudos (dict), los parsea a tipos, calcula indicadores,
-    pinta con LiveRenderer y publica con IndicatorPublisher.
+    Recibe datos crudos (dict), los parsea a tipos, calcula indicadores
+    y publica con IndicatorPublisher.
     """
-    def __init__(self, publisher: IndicatorPublisher, renderer: LiveRenderer):
+    def __init__(self, publisher: IndicatorPublisher):
         self.pub = publisher
-        self.ui = renderer
 
         # Engine Híbrido: usa Rust cuando está disponible, Python como fallback
         self.hybrid = HybridIndicatorEngine()
@@ -103,6 +140,34 @@ class IndicatorsEngine:
         # Acumulador de CVD a partir de frames agregados (oflow_frame)
         self._cvd_accum = defaultdict(float)  # por símbolo
 
+    @staticmethod
+    def _to_dict(value: Any) -> Dict[str, Any]:
+        """
+        Convierte resultados de PyO3 (que suelen exponerse como objetos con __dict__)
+        a un dict plano para poder serializar/publicar sin problemas.
+        """
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        for attr in ("dict", "to_dict", "_asdict"):
+            candidate = getattr(value, attr, None)
+            if callable(candidate):
+                try:
+                    result = candidate()
+                    return dict(result)
+                except Exception:
+                    continue
+        if hasattr(value, "__dict__"):
+            return dict(value.__dict__)
+        if hasattr(value, "__dict__"):
+            return dict(value.__dict__)
+        # fallback: usar vars()
+        try:
+            return dict(vars(value))
+        except Exception:
+            return {}
+
     # --- Hooks para el subscriber (reciben dicts crudos) ---
     async def on_candle_dict(self, d: Dict[str, Any]) -> None:
         bar = parse_bar(d)
@@ -110,36 +175,44 @@ class IndicatorsEngine:
         rsi_val = self.rsi.on_bar(bar)
         if rsi_val is not None:
             name = f"rsi{getattr(self.rsi, 'period', 14)}"
-            await self.ui.update(bar.symbol, name, rsi_val, bar.ts, bar.tf)
             await self.pub.publish_candle(bar.tf, name, bar.symbol, {"ts": bar.ts, "value": float(rsi_val)})
 
         macd_out = self.macd.on_bar(bar)
         if macd_out:
-            await self.ui.update(bar.symbol, "macd", macd_out, bar.ts, bar.tf)
             await self.pub.publish_candle(bar.tf, "macd", bar.symbol, {"ts": bar.ts, **macd_out})
 
         adx_out = self.adx.on_bar(bar)
         if adx_out:
             name = f"adx{getattr(self.adx, 'period', 14)}"
-            await self.ui.update(bar.symbol, name, adx_out, bar.ts, bar.tf)
             await self.pub.publish_candle(bar.tf, name, bar.symbol, {"ts": bar.ts, **adx_out})
 
         _ = self.svp.on_bar(bar)
         svp_top = self.svp.snapshot_top(symbol=bar.symbol)  # ← cambio clave
         if svp_top:
             payload = {"ts": bar.ts, "top": svp_top}
-            await self.ui.update(bar.symbol, "svp", payload, bar.ts, bar.tf)
             await self.pub.publish_candle(bar.tf, "svp", bar.symbol, payload)
 
         vprof_out = self.volprof.on_bar(bar)
         if vprof_out:
-            await self.ui.update(bar.symbol, "volprof", vprof_out, bar.ts, bar.tf)
             await self.pub.publish_candle(bar.tf, "volprof", bar.symbol, {"ts": bar.ts, **vprof_out})
 
     async def on_trade_dict(self, d: Dict[str, Any]) -> None:
         # Si te llega un frame agregado aquí por error, redirige
         if d.get("type") == "oflow_frame":
             await self.on_oflow_frame_dict(d)
+            return
+        
+        # Manejar vwap_frame directamente (ya viene calculado desde data-extractor)
+        if d.get("type") == "vwap_frame":
+            try:
+                symbol = str(d["symbol"])
+                ts = int(d["ts"])
+                vwap = float(d["vwap"])
+                await self.pub.publish_trades("vwap", symbol, {"ts": ts, "vwap": vwap})
+            except Exception as e:
+                logging.getLogger("runner").warning(
+                    f"vwap_frame malformado ({e}): keys={list(d.keys())} payload={d}"
+                )
             return
 
         try:
@@ -163,13 +236,11 @@ class IndicatorsEngine:
         # VWAP
         vwap_result = self.hybrid.calculate_vwap(trade_data)
         if vwap_result:
-            await self.ui.update(tr.symbol, "vwap", vwap_result.value, tr.ts, "-")
             await self.pub.publish_trades("vwap", tr.symbol, {"ts": tr.ts, "vwap": float(vwap_result.value)})
 
         # CVD
         cvd_result = self.hybrid.calculate_cvd(trade_data)
         if cvd_result:
-            await self.ui.update(tr.symbol, "cvd", {"cvd": cvd_result.value}, tr.ts, "-")
             await self.pub.publish_trades("cvd", tr.symbol, {"ts": tr.ts, "cvd": float(cvd_result.value)})
 
     # --- NUEVO: frames agregados de order flow ---
@@ -203,7 +274,6 @@ class IndicatorsEngine:
         }
 
         # pintar y publicar (subject: indicators.trades.oflow)
-        await self.ui.update(sym, "oflow", payload, ts, "-")
         await self.pub.publish_trades("oflow", sym, payload)
 
     async def on_book_dict(self, d: Dict[str, Any]) -> None:
@@ -220,11 +290,17 @@ class IndicatorsEngine:
         # Liquidity: usar engine híbrido
         liq_result = self.hybrid.calculate_liquidity(book_data)
         if liq_result:
-            await self.ui.update(snap.symbol, "liquidity", liq_result.value, snap.ts, "-")
-            await self.pub.publish_book("liquidity", snap.symbol, {"ts": snap.ts, **liq_result.value})
+            await self.pub.publish_book(
+                "liquidity",
+                snap.symbol,
+                {"ts": snap.ts, **self._to_dict(liq_result.value)},
+            )
 
         # Heatmap: usar engine híbrido
         hm_result = self.hybrid.calculate_heatmap(book_data)
         if hm_result:
-            await self.ui.update(snap.symbol, "heatmap", hm_result.value, snap.ts, "-")
-            await self.pub.publish_book("heatmap", snap.symbol, {"ts": snap.ts, **hm_result.value})
+            await self.pub.publish_book(
+                "heatmap",
+                snap.symbol,
+                {"ts": snap.ts, **self._to_dict(hm_result.value)},
+            )

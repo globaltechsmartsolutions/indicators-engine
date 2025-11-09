@@ -4,6 +4,8 @@ import math
 import orjson
 import pytest
 
+from indicators_engine.indicators.classic.macd import MACDConfig
+
 # ---------- Helpers ----------
 
 async def subscribe_out(nc, subject: str, symbol: str, tf: str):
@@ -96,8 +98,9 @@ async def test_macd_pipeline(nc, cfg, make_candles_fn, macd_worker):
             pattern=cfg["pattern"], seed=cfg["seed"], symbol=symbol
         )
 
-        # 3) MACD emite desde la 3ª barra => n - 2
-        expected_min = max(0, n - 2)
+        cfg_macd = MACDConfig()
+        warmup = cfg_macd.slow + cfg_macd.signal + cfg_macd.warmup_extra
+        expected_min = max(0, n - warmup)
         got = await collect_messages(q, expected_min, timeout_sec=8.0)
 
         print(f"📊 [RESULT] received={len(got)} (expected ≥ {expected_min}) last={got[-1] if got else None}")

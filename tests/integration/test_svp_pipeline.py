@@ -3,7 +3,9 @@ import asyncio
 import orjson
 import pytest
 
-from indicators_engine.pipelines.svp import SvpCalc
+from indicators_engine.indicators.volume.svp import SessionVolumeProfile, SVPConfig
+from indicators_engine.engine import session_key_utc_day
+from indicators_engine.core.types import Trade
 
 def _p(msg):
     print(msg, flush=True)
@@ -54,7 +56,13 @@ async def test_svp_pipeline(nc, cfg):
     OUT_SUBJ = "indicators.svp"
 
     tick_size = float(cfg.get("poc_tick_size", 0.25))  # reutilizamos setting si existe
-    svp = SvpCalc(tick_size=tick_size, reset_daily=True)
+    svp = SessionVolumeProfile(
+        SVPConfig(
+            session_key_fn=session_key_utc_day,
+            tick_size=tick_size,
+            top_n=0,
+        )
+    )
 
     async def on_trade_msg(msg):
         try:
@@ -80,8 +88,12 @@ async def test_svp_pipeline(nc, cfg):
             _p("[IN][RX][IGN] missing field -> skip")
             return
 
-        snap = svp.on_trade(symbol=symbol, ts=ts, price=float(price), size=float(size), tf=tf)
-        _p(f"[SVP][SNAP] ts={ts} poc={snap['poc']} vtotal={snap['vtotal']} bins={snap['bins']}")
+        svp.on_trade(Trade(symbol=symbol, ts=ts, price=float(price), size=float(size)))
+        snap = svp.snapshot(symbol=symbol)
+        poc = snap["poc"][0] if snap["poc"] else None
+        vtotal = snap["total_v"]
+        bins = [{"price": b, "volume": v} for b, v in snap["bins"]]
+        _p(f"[SVP][SNAP] ts={ts} poc={poc} vtotal={vtotal} bins={bins}")
 
         out = {
             "v": 1,
@@ -91,9 +103,9 @@ async def test_svp_pipeline(nc, cfg):
             "ts": ts,
             "indicator": "svp",
             "tick_size": tick_size,
-            "poc": snap["poc"],
-            "vtotal": snap["vtotal"],
-            "bins": snap["bins"],
+            "poc": poc,
+            "vtotal": vtotal,
+            "bins": bins,
             "id": f"{symbol}|{tf}|{ts}|svp",
         }
         _p(f"[OUT][PUB] -> {out}")

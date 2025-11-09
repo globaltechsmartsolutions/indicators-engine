@@ -1,6 +1,8 @@
 from __future__ import annotations
 import math
 from typing import Iterable, Optional
+from indicators_engine.logs.logger import get_logger
+logger = get_logger(__name__)
 
 
 # ========= helpers numéricos =========

@@ -4,6 +4,8 @@ import asyncio
 import orjson
 import pytest
 
+from indicators_engine.indicators.classic.adx import ADXConfig
+
 DEBUG = os.getenv("ADX_INT_DEBUG") == "1"
 
 def _log(msg: str):
@@ -71,6 +73,14 @@ async def collect_messages(q: asyncio.Queue, expected_min: int, timeout_sec: flo
         except asyncio.TimeoutError:
             if DEBUG:
                 _log(f"[COL] … ({len(got)}/{expected_min})")
+    # Drenar restos que ya estuvieran en cola
+    while True:
+        try:
+            d = await asyncio.wait_for(q.get(), timeout=0.05)
+            got.append(d)
+            _throttle_log_bar(len(got), expected_min, "DEQ", d)
+        except asyncio.TimeoutError:
+            break
     _log(f"[COL] done: got={len(got)}")
     return got
 
@@ -141,7 +151,8 @@ async def test_adx_pipeline(nc, cfg, make_candles_fn, adx_worker):
         await publish_noise(nc, IN_SUBJ, first_candle)
 
         # 3) Warm-up y colecta
-        warmup = max(0, 2 * period - 1)
+        adx_cfg = ADXConfig(period=period)
+        warmup = max(0, adx_cfg.period + adx_cfg.warmup_extra)
         expected_min = max(0, n - warmup)
         if expected_min == 0:
             pytest.skip(f"No se espera ADX porque n ({n}) <= warmup ({warmup})")
