@@ -143,30 +143,58 @@ class IndicatorsEngine:
     @staticmethod
     def _to_dict(value: Any) -> Dict[str, Any]:
         """
-        Convierte resultados de PyO3 (que suelen exponerse como objetos con __dict__)
+        Convierte resultados de PyO3 (que suelen exponerse como objetos con atributos)
         a un dict plano para poder serializar/publicar sin problemas.
         """
+
+        def _convert(obj: Any) -> Any:
+            if obj is None or isinstance(obj, (str, float, int, bool)):
+                return obj
+            if isinstance(obj, dict):
+                return {k: _convert(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple, set)):
+                return [_convert(v) for v in obj]
+
+            for attr in ("dict", "to_dict", "_asdict", "as_dict"):
+                candidate = getattr(obj, attr, None)
+                if callable(candidate):
+                    try:
+                        result = candidate()
+                        if result is not None:
+                            return _convert(result)
+                    except Exception:
+                        continue
+
+            if hasattr(obj, "__dict__") and obj.__dict__:
+                return {k: _convert(v) for k, v in obj.__dict__.items() if not k.startswith("_")}
+
+            data: Dict[str, Any] = {}
+            for attr in dir(obj):
+                if attr.startswith("_"):
+                    continue
+                try:
+                    attr_value = getattr(obj, attr)
+                except Exception:
+                    continue
+                if callable(attr_value):
+                    continue
+                data[attr] = _convert(attr_value)
+            if data:
+                return data
+            try:
+                return dict(vars(obj))
+            except Exception:
+                return str(obj)
+
         if value is None:
             return {}
         if isinstance(value, dict):
             return value
-        for attr in ("dict", "to_dict", "_asdict"):
-            candidate = getattr(value, attr, None)
-            if callable(candidate):
-                try:
-                    result = candidate()
-                    return dict(result)
-                except Exception:
-                    continue
-        if hasattr(value, "__dict__"):
-            return dict(value.__dict__)
-        if hasattr(value, "__dict__"):
-            return dict(value.__dict__)
-        # fallback: usar vars()
-        try:
-            return dict(vars(value))
-        except Exception:
-            return {}
+
+        converted = _convert(value)
+        if isinstance(converted, dict):
+            return converted
+        return {"value": converted}
 
     # --- Hooks para el subscriber (reciben dicts crudos) ---
     async def on_candle_dict(self, d: Dict[str, Any]) -> None:
@@ -208,7 +236,23 @@ class IndicatorsEngine:
                 symbol = str(d["symbol"])
                 ts = int(d["ts"])
                 vwap = float(d["vwap"])
-                await self.pub.publish_trades("vwap", symbol, {"ts": ts, "vwap": vwap})
+                payload = {"ts": ts, "vwap": vwap}
+                price = d.get("price") or d.get("last_price")
+                if isinstance(price, (int, float)):
+                    price = float(price)
+                    diff_abs = price - vwap
+                    diff_pct = (diff_abs / vwap) * 100 if vwap else 0.0
+                    payload.update(
+                        {
+                            "last_price": price,
+                            "deviation_abs": diff_abs,
+                            "deviation_pct": diff_pct,
+                        }
+                    )
+                cum_v = d.get("cumV") or d.get("cum_volume")
+                if isinstance(cum_v, (int, float)):
+                    payload["cum_volume"] = float(cum_v)
+                await self.pub.publish_trades("vwap", symbol, payload)
             except Exception as e:
                 logging.getLogger("runner").warning(
                     f"vwap_frame malformado ({e}): keys={list(d.keys())} payload={d}"
@@ -236,7 +280,27 @@ class IndicatorsEngine:
         # VWAP
         vwap_result = self.hybrid.calculate_vwap(trade_data)
         if vwap_result:
-            await self.pub.publish_trades("vwap", tr.symbol, {"ts": tr.ts, "vwap": float(vwap_result.value)})
+            vwap_metrics = self._to_dict(vwap_result.value)
+            vwap_value = vwap_metrics.get("vwap")
+            if vwap_value is None:
+                try:
+                    vwap_value = float(vwap_result.value)
+                except Exception:
+                    vwap_value = None
+            payload_vwap: Dict[str, Any] = {"ts": tr.ts}
+            if vwap_value is not None:
+                payload_vwap["vwap"] = float(vwap_value)
+                price = trade_data.get("price")
+                if isinstance(price, (int, float)) and vwap_value:
+                    diff_abs = float(price) - float(vwap_value)
+                    diff_pct = (diff_abs / float(vwap_value)) * 100.0
+                    payload_vwap["last_price"] = float(price)
+                    payload_vwap["deviation_abs"] = diff_abs
+                    payload_vwap["deviation_pct"] = diff_pct
+            for key in ("pv_sum", "v_sum", "session_id"):
+                if key in vwap_metrics and key not in payload_vwap:
+                    payload_vwap[key] = vwap_metrics[key]
+            await self.pub.publish_trades("vwap", tr.symbol, payload_vwap)
 
         # CVD
         cvd_result = self.hybrid.calculate_cvd(trade_data)
