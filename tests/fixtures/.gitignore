@@ -1,0 +1,6 @@
+# Fixtures capturados (pueden ser grandes)
+*.jsonl
+
+# Mantener solo el README
+!README.md
+
