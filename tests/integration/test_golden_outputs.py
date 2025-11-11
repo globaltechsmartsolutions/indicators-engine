@@ -80,14 +80,30 @@ def load_golden_outputs(golden_path: Path) -> List[Dict[str, Any]]:
     return outputs
 
 
+def normalize_for_comparison(value: Any) -> Any:
+    """Normaliza tuplas a listas y recursivamente normaliza estructuras anidadas."""
+    if isinstance(value, tuple):
+        return [normalize_for_comparison(item) for item in value]
+    elif isinstance(value, list):
+        return [normalize_for_comparison(item) for item in value]
+    elif isinstance(value, dict):
+        return {k: normalize_for_comparison(v) for k, v in value.items()}
+    else:
+        return value
+
+
 @pytest.mark.asyncio
 async def test_engine_outputs_match_golden() -> None:
     """Compara outputs del engine con golden snapshots."""
-    fixtures_path = Path(__file__).parent.parent / "fixtures" / "live_session.jsonl"
-    golden_path = Path(__file__).parent.parent / "fixtures" / "golden_outputs.jsonl"
+    fixtures_dir = Path(__file__).parent.parent / "fixtures"
+    # Buscar primero live_session, luego synthetic_session
+    fixtures_path = fixtures_dir / "live_session.jsonl"
+    if not fixtures_path.exists():
+        fixtures_path = fixtures_dir / "synthetic_session.jsonl"
+    golden_path = fixtures_dir / "golden_outputs.jsonl"
 
     if not fixtures_path.exists():
-        pytest.skip(f"Fixtures no encontrados en {fixtures_path}. Ejecuta capture_fixtures.py primero.")
+        pytest.skip(f"Fixtures no encontrados. Ejecuta capture_fixtures.py o generate_synthetic_fixtures.py primero.")
 
     if not golden_path.exists():
         pytest.skip(f"Golden outputs no encontrados en {golden_path}. Ejecuta generate_golden_outputs.py primero.")
@@ -126,6 +142,10 @@ async def test_engine_outputs_match_golden() -> None:
         actual_payload = actual["payload"]
         expected_payload = expected["payload"]
 
+        # Normalizar para comparación (tuplas -> listas)
+        actual_payload = normalize_for_comparison(actual_payload)
+        expected_payload = normalize_for_comparison(expected_payload)
+
         # Comparar campos críticos con tolerancia para floats
         for key in expected_payload:
             if key == "ts":
@@ -144,7 +164,10 @@ async def test_engine_outputs_match_golden() -> None:
 @pytest.mark.asyncio
 async def test_liquidity_values_within_bounds() -> None:
     """Valida que los valores de liquidity están en rangos esperados."""
-    fixtures_path = Path(__file__).parent.parent / "fixtures" / "live_session.jsonl"
+    fixtures_dir = Path(__file__).parent.parent / "fixtures"
+    fixtures_path = fixtures_dir / "live_session.jsonl"
+    if not fixtures_path.exists():
+        fixtures_path = fixtures_dir / "synthetic_session.jsonl"
     if not fixtures_path.exists():
         pytest.skip("Fixtures no encontrados")
 

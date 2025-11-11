@@ -4,7 +4,25 @@ Este directorio contiene herramientas para capturar datos reales del sistema y u
 
 ## Flujo de Trabajo
 
-### 1. Capturar Fixtures Reales
+### Opción 1: Fixtures Sintéticos (Para Testing Rápido)
+
+Si no tienes el stack corriendo, puedes generar fixtures sintéticos:
+
+```bash
+python tools/generate_synthetic_fixtures.py \
+    --output tests/fixtures/synthetic_session.jsonl \
+    --num-events 150
+```
+
+Luego genera los golden outputs:
+
+```bash
+python tools/generate_golden_outputs.py \
+    tests/fixtures/synthetic_session.jsonl \
+    tests/fixtures/golden_outputs.jsonl
+```
+
+### Opción 2: Fixtures Reales (Para Validación Completa)
 
 Con el stack completo corriendo (fake extractor + engine), ejecuta:
 
@@ -23,9 +41,9 @@ Esto captura todos los eventos de `md.*` durante 30 segundos y los guarda en for
 - `--limit`: Límite máximo de mensajes (default: 1000)
 - `--output`: Ruta donde guardar los fixtures
 
-### 2. Generar Golden Outputs
+### Generar Golden Outputs
 
-Una vez capturados los fixtures, genera los outputs esperados ejecutando el engine sobre ellos:
+Una vez capturados los fixtures (reales o sintéticos), genera los outputs esperados ejecutando el engine sobre ellos:
 
 ```bash
 python tools/generate_golden_outputs.py \
@@ -35,7 +53,7 @@ python tools/generate_golden_outputs.py \
 
 Esto procesa todos los eventos capturados y genera los indicadores que deberían publicarse, guardándolos como "golden snapshots".
 
-### 3. Ejecutar Tests de Regresión
+### Ejecutar Tests de Regresión
 
 Los tests en `tests/integration/test_golden_outputs.py` comparan los outputs actuales del engine con los golden snapshots:
 
@@ -43,7 +61,7 @@ Los tests en `tests/integration/test_golden_outputs.py` comparan los outputs act
 pytest tests/integration/test_golden_outputs.py -v
 ```
 
-**Nota:** Los tests se saltan automáticamente si no existen los fixtures o golden outputs. Esto permite que el CI funcione sin requerir fixtures pre-generados.
+**Nota:** Los tests buscan primero `live_session.jsonl` y si no existe, usan `synthetic_session.jsonl`. Se saltan automáticamente si no existen los fixtures o golden outputs.
 
 ## Estructura de Fixtures
 
